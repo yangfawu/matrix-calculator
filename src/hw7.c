@@ -2,6 +2,8 @@
 
 // my utils
 
+#define INTERMEDIATE_MAT_NAME '$'
+
 typedef unsigned int uint;
 
 matrix_sf* create_empty_mats_sf_from_dim(int R, int C) {
@@ -30,6 +32,15 @@ int op_to_precendence(char op) {
     return -1;
 }
 
+uint is_eval(char *expr) {
+    // an expression string must NOT be eval if it sees []
+    char c;
+    while (c = *expr++) {
+        if (c == '[')
+            return 0;
+    }
+    return 1;
+}
 
 // assignment below
 
@@ -75,6 +86,7 @@ matrix_sf* add_mats_sf(const matrix_sf *mat1, const matrix_sf *mat2) {
         C = mat1->num_cols;
     
     matrix_sf *out = create_empty_mats_sf_from_dim(R, C);
+    out->name = INTERMEDIATE_MAT_NAME;
 
     int *mat1_p = mat1->values, 
         *mat2_p = mat2->values, 
@@ -98,6 +110,7 @@ matrix_sf* mult_mats_sf(const matrix_sf *mat1, const matrix_sf *mat2) {
         C = mat2->num_cols;
 
     matrix_sf *out = create_empty_mats_sf_from_dim(R, C);
+    out->name = INTERMEDIATE_MAT_NAME;
 
     int *mat1_p = mat1->values, 
         *mat2_p = mat2->values, 
@@ -126,6 +139,7 @@ matrix_sf* transpose_mat_sf(const matrix_sf *mat) {
         C = mat->num_cols;
     
     matrix_sf *out = create_empty_mats_sf_from_dim(C, R);
+    out->name = INTERMEDIATE_MAT_NAME;
 
     int *mat_p = mat->values, 
         *out_p = out->values;
@@ -247,6 +261,7 @@ char* infix2postfix_sf(char *infix) {
                 break;
             case '\'':
             default:
+                // matrix letter case
                 *out_p = c;
                 out_p++;
                 true_len++;
@@ -268,11 +283,133 @@ char* infix2postfix_sf(char *infix) {
 }
 
 matrix_sf* evaluate_expr_sf(char name, char *expr, bst_sf *root) {
-    return NULL;
+    char *postfix = infix2postfix_sf(expr);
+    char *postfix_p = postfix;
+
+    matrix_sf **stack = calloc(strlen(postfix), sizeof(matrix_sf*));
+    uint stack_len = 0;
+
+    // printf("expr=%s\n", expr);
+    // printf("expr_p=%s\n", postfix);
+
+    char c;
+    matrix_sf *A, *B;
+    while (c = *postfix_p++) {
+        A = NULL;
+        B = NULL;
+
+        switch (c) {
+            case '+':
+                assert(stack_len > 1);
+                A = stack[stack_len - 1];
+                stack_len--;
+                // printf("input %c\n", A->name);
+                // print_matrix_sf(A);
+
+                B = stack[stack_len - 1];
+                stack_len--;
+                // printf("input %c\n", B->name);
+                // print_matrix_sf(B);
+
+                stack[stack_len++] = add_mats_sf(A, B);
+                // printf("add %c\n", stack[stack_len - 1]->name);
+                // print_matrix_sf(stack[stack_len - 1]);
+                break;
+            case '*':
+                assert(stack_len > 1);
+                A = stack[stack_len - 1];
+                stack_len--;
+                // printf("input %c\n", A->name);
+                // print_matrix_sf(A);
+
+                B = stack[stack_len - 1];
+                stack_len--;
+                // printf("input %c\n", B->name);
+                // print_matrix_sf(B);
+
+                // note that A * B appears as B,A on the stack with B on the top
+                stack[stack_len++] = mult_mats_sf(B, A);
+                // printf("mult %c\n", stack[stack_len - 1]->name);
+                // print_matrix_sf(stack[stack_len - 1]);
+                break;
+            case '\'':
+                assert(stack_len > 0);
+                A = stack[stack_len - 1];
+                stack_len--;
+                // printf("input %c\n", A->name);
+                // print_matrix_sf(A);
+
+                stack[stack_len++] = transpose_mat_sf(A);
+                // printf("Transposed %c\n", stack[stack_len - 1]->name);
+                // print_matrix_sf(stack[stack_len - 1]);
+                break;
+            default:
+                // matrix letter case
+                stack[stack_len++] = find_bst_sf(c, root);
+                // printf("just input %c\n", stack[stack_len - 1]->name);
+                // print_matrix_sf(stack[stack_len - 1]);
+                break;
+        }
+
+        if (A != NULL && A->name == INTERMEDIATE_MAT_NAME) {
+            free(A);
+            A = NULL;
+        }
+        if (B != NULL && B->name == INTERMEDIATE_MAT_NAME) {
+            free(B);
+            B = NULL;
+        }
+    }
+
+    assert(stack_len == 1);
+    matrix_sf *result = stack[0];
+    result->name = name;
+
+    // print_matrix_sf(result);
+
+    free(postfix);
+    free(stack);
+    return result;
 }
 
 matrix_sf *execute_script_sf(char *filename) {
-   return NULL;
+    FILE *fp;
+    assert((fp = fopen(filename, "r")) != NULL);
+
+    bst_sf *root = NULL;
+    matrix_sf *last_eval = NULL;
+
+    char *buffer = NULL;
+    char *mat_str, *expr_str;
+    char M;
+
+    size_t max_line_size = MAX_LINE_LEN;
+    while (getline(&buffer, &max_line_size, fp) != -1) {
+        // extract name and expression
+        assert((mat_str = strtok(buffer, "=")) != NULL);
+        
+        // account for the potential \n at the end of line
+        assert((expr_str = strtok(NULL, "\n")) != NULL);
+
+        assert(sscanf(mat_str, "%c", &M) == 1);
+
+        // calculate new matrix and insert
+        last_eval = is_eval(expr_str) ? 
+            evaluate_expr_sf(M, expr_str, root) :
+            create_matrix_sf(M, expr_str);
+        root = insert_bst_sf(last_eval, root);
+    }
+
+    // after dealing with all the lines, free buffer
+    if (buffer != NULL)
+        free(buffer);
+
+    assert(last_eval != NULL);
+    matrix_sf *last_eval_copy = copy_matrix(last_eval->num_rows, last_eval->num_cols, last_eval->values);
+
+    free_bst_sf(root);
+    fclose(fp);
+    return last_eval_copy;
 }
 
 // This is a utility function used during testing. Feel free to adapt the code to implement some of
